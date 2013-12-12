@@ -15,7 +15,6 @@ import py_compile
 import re
 import shutil
 import socket
-import ssl
 import subprocess
 import sys
 import tarfile
@@ -1183,47 +1182,52 @@ def _iglob(path_glob):
 # HTTPSConnection which verifies certificates/matches domains
 #
 
-class HTTPSConnection(httplib.HTTPSConnection):
-    ca_certs = None # set this to the path to the certs file (.pem)
-    check_domain = True # only used if ca_certs is not None
+try:
+    import ssl
+except ImportError:
+    pass
+else:
+    class HTTPSConnection(httplib.HTTPSConnection):
+        ca_certs = None # set this to the path to the certs file (.pem)
+        check_domain = True # only used if ca_certs is not None
 
-    # noinspection PyPropertyAccess
-    def connect(self):
-        sock = socket.create_connection((self.host, self.port), self.timeout)
-        if getattr(self, '_tunnel_host', False):
-            self.sock = sock
-            self._tunnel()
+        # noinspection PyPropertyAccess
+        def connect(self):
+            sock = socket.create_connection((self.host, self.port), self.timeout)
+            if getattr(self, '_tunnel_host', False):
+                self.sock = sock
+                self._tunnel()
 
-        if not hasattr(ssl, 'SSLContext'):
-            # For 2.x
-            if self.ca_certs:
-                cert_reqs = ssl.CERT_REQUIRED
+            if not hasattr(ssl, 'SSLContext'):
+                # For 2.x
+                if self.ca_certs:
+                    cert_reqs = ssl.CERT_REQUIRED
+                else:
+                    cert_reqs = ssl.CERT_NONE
+                self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file,
+                                            cert_reqs=cert_reqs,
+                                            ssl_version=ssl.PROTOCOL_SSLv23,
+                                            ca_certs=self.ca_certs)
             else:
-                cert_reqs = ssl.CERT_NONE
-            self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file,
-                                        cert_reqs=cert_reqs,
-                                        ssl_version=ssl.PROTOCOL_SSLv23,
-                                        ca_certs=self.ca_certs)
-        else:
-            context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-            context.options |= ssl.OP_NO_SSLv2
-            if self.cert_file:
-                context.load_cert_chain(self.cert_file, self.key_file)
-            kwargs = {}
-            if self.ca_certs:
-                context.verify_mode = ssl.CERT_REQUIRED
-                context.load_verify_locations(cafile=self.ca_certs)
-                if getattr(ssl, 'HAS_SNI', False):
-                    kwargs['server_hostname'] = self.host
-            self.sock = context.wrap_socket(sock, **kwargs)
-        if self.ca_certs and self.check_domain:
-            try:
-                match_hostname(self.sock.getpeercert(), self.host)
-                logger.debug('Host verified: %s', self.host)
-            except CertificateError:
-                self.sock.shutdown(socket.SHUT_RDWR)
-                self.sock.close()
-                raise
+                context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+                context.options |= ssl.OP_NO_SSLv2
+                if self.cert_file:
+                    context.load_cert_chain(self.cert_file, self.key_file)
+                kwargs = {}
+                if self.ca_certs:
+                    context.verify_mode = ssl.CERT_REQUIRED
+                    context.load_verify_locations(cafile=self.ca_certs)
+                    if getattr(ssl, 'HAS_SNI', False):
+                        kwargs['server_hostname'] = self.host
+                self.sock = context.wrap_socket(sock, **kwargs)
+            if self.ca_certs and self.check_domain:
+                try:
+                    match_hostname(self.sock.getpeercert(), self.host)
+                    logger.debug('Host verified: %s', self.host)
+                except CertificateError:
+                    self.sock.shutdown(socket.SHUT_RDWR)
+                    self.sock.close()
+                    raise
 
 class HTTPSHandler(BaseHTTPSHandler):
     def __init__(self, ca_certs, check_domain=True):
